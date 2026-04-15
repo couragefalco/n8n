@@ -1,0 +1,367 @@
+{
+  "name": "Lemlist to Attio Sync - Final Corrected",
+  "nodes": [
+    {
+      "parameters": {
+        "event": "emailsReplied"
+      },
+      "id": "email-reply-trigger",
+      "name": "Email Reply",
+      "type": "n8n-nodes-base.lemlistTrigger",
+      "typeVersion": 1,
+      "position": [140, 260]
+    },
+    {
+      "parameters": {
+        "event": "linkedinReplied"
+      },
+      "id": "linkedin-reply-trigger",
+      "name": "LinkedIn Reply",
+      "type": "n8n-nodes-base.lemlistTrigger",
+      "typeVersion": 1,
+      "position": [140, 440]
+    },
+    {
+      "parameters": {
+        "event": "interested"
+      },
+      "id": "interested-trigger",
+      "name": "Interested",
+      "type": "n8n-nodes-base.lemlistTrigger",
+      "typeVersion": 1,
+      "position": [140, 620]
+    },
+    {
+      "parameters": {
+        "resource": "lead",
+        "operation": "get",
+        "email": "={{ $json.email }}"
+      },
+      "id": "get-lead",
+      "name": "Get Lead Details",
+      "type": "n8n-nodes-base.lemlist",
+      "typeVersion": 2,
+      "position": [360, 440]
+    },
+    {
+      "parameters": {
+        "jsCode": "const leadData = $json;\nconst webhookData = $input.item.json;\n\n// Determine if interested\nconst isInterested = webhookData.type === 'interested' || \n                   webhookData.type === 'emailsInterested' || \n                   webhookData.type === 'linkedinInterested';\n\n// Set priority and deadline\nconst priority = isInterested ? 'high' : 'medium';\nconst deadlineHours = isInterested ? 4 : 24;\n\n// Create full name\nconst fullName = [leadData.firstName, leadData.lastName]\n  .filter(name => name && name.trim())\n  .join(' ') || leadData.email?.split('@')[0] || 'Unknown';\n\n// Task title\nconst actionText = isInterested ? 'INTERESTED LEAD' : 'Reply Received';\nlet taskTitle = `${actionText}: ${fullName}`;\nif (leadData.companyName) {\n  taskTitle += ` (${leadData.companyName})`;\n}\n\nreturn {\n  email: leadData.email || '',\n  firstName: leadData.firstName || '',\n  lastName: leadData.lastName || '',\n  fullName: fullName,\n  companyName: leadData.companyName || '',\n  jobTitle: leadData.title || leadData.jobTitle || '',\n  phone: leadData.phone || '',\n  linkedinUrl: leadData.linkedinUrl || '',\n  isInterested: isInterested,\n  priority: priority,\n  deadlineHours: deadlineHours,\n  taskTitle: taskTitle,\n  campaignId: leadData.campaignId || webhookData.campaignId || ''\n};"
+      },
+      "id": "process-data",
+      "name": "Process Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 440]
+    },
+    {
+      "parameters": {
+        "operation": "List Records",
+        "object": "people",
+        "filter[1][attribute]": "email_addresses",
+        "filter[1][value]": "={{ $json.email }}"
+      },
+      "id": "search-person",
+      "name": "Search Person",
+      "type": "n8n-nodes-attio.attio",
+      "typeVersion": 1,
+      "position": [760, 440],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.data?.length || 0 }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "person-exists",
+      "name": "Person Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [960, 440]
+    },
+    {
+      "parameters": {
+        "operation": "Update Record (Append)",
+        "object": "people",
+        "record_id": "={{ $json.data[0].id.record_id }}",
+        "data": {
+          "values": {
+            "job_title": "={{ $('Process Data').item.json.jobTitle }}",
+            "phone_numbers": "={{ $('Process Data').item.json.phone ? [{\"phone_number\": $('Process Data').item.json.phone}] : [] }}"
+          }
+        }
+      },
+      "id": "update-person",
+      "name": "Update Person",
+      "type": "n8n-nodes-attio.attio",
+      "typeVersion": 1,
+      "position": [1160, 340]
+    },
+    {
+      "parameters": {
+        "operation": "Create Record",
+        "object": "people",
+        "data": {
+          "values": {
+            "email_addresses": "=[{\"email_address\": \"{{ $('Process Data').item.json.email }}\"}]",
+            "name": "=[{\"first_name\": \"{{ $('Process Data').item.json.firstName }}\", \"last_name\": \"{{ $('Process Data').item.json.lastName }}\"}]",
+            "job_title": "={{ $('Process Data').item.json.jobTitle }}",
+            "phone_numbers": "={{ $('Process Data').item.json.phone ? [{\"phone_number\": $('Process Data').item.json.phone}] : [] }}"
+          }
+        }
+      },
+      "id": "create-person",
+      "name": "Create Person",
+      "type": "n8n-nodes-attio.attio",
+      "typeVersion": 1,
+      "position": [1160, 540]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "person_id",
+              "name": "personId",
+              "value": "={{ $json.data?.id?.record_id || $json.data?.[0]?.id?.record_id }}",
+              "type": "string"
+            },
+            {
+              "id": "lead_data",
+              "name": "leadData",
+              "value": "={{ $('Process Data').item.json }}",
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "id": "merge-data",
+      "name": "Merge Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1360, 440]
+    },
+    {
+      "parameters": {
+        "operation": "Create Task",
+        "data": {
+          "content": {
+            "title": "={{ $json.leadData.taskTitle }}",
+            "description": "Lead responded{{ $json.leadData.isInterested ? ' and is INTERESTED' : '' }}\\n\\nContact: {{ $json.leadData.email }}\\nCompany: {{ $json.leadData.companyName || 'Not specified' }}\\nJob Title: {{ $json.leadData.jobTitle || 'Not specified' }}\\n\\n{{ $json.leadData.isInterested ? '⚡ HIGH PRIORITY - Follow up immediately!' : 'Standard follow-up required.' }}"
+          },
+          "deadline_at": "={{ new Date(Date.now() + $json.leadData.deadlineHours * 60 * 60 * 1000).toISOString() }}",
+          "status": "pending",
+          "assignees": "[{\"referenced_actor_type\": \"workspace_member\", \"referenced_actor_id\": \"66ca8855-38db-4976-a627-584e8799535b\"}]",
+          "linked_records": "[{\"target_object\": \"people\", \"target_record_id\": \"{{ $json.personId }}\"}]"
+        }
+      },
+      "id": "create-task",
+      "name": "Create Task",
+      "type": "n8n-nodes-attio.attio",
+      "typeVersion": 1,
+      "position": [1560, 440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.leadData.isInterested }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "is-interested",
+      "name": "Is Interested?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 640]
+    },
+    {
+      "parameters": {
+        "operation": "Create Note",
+        "data": {
+          "parent_object": "people",
+          "parent_record_id": "={{ $('Merge Data').item.json.personId }}",
+          "title": "🔥 INTERESTED LEAD",
+          "content_plaintext": "Lead marked as INTERESTED!\\n\\nContact Details:\\n- Email: {{ $('Merge Data').item.json.leadData.email }}\\n- Name: {{ $('Merge Data').item.json.leadData.fullName }}\\n- Company: {{ $('Merge Data').item.json.leadData.companyName || 'Not specified' }}\\n- Job Title: {{ $('Merge Data').item.json.leadData.jobTitle || 'Not specified' }}\\n\\nACTION REQUIRED: Follow up immediately!",
+          "format": "plaintext"
+        }
+      },
+      "id": "create-note",
+      "name": "Create Note",
+      "type": "n8n-nodes-attio.attio",
+      "typeVersion": 1,
+      "position": [1760, 640]
+    }
+  ],
+  "connections": {
+    "Email Reply": {
+      "main": [
+        [
+          {
+            "node": "Get Lead Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn Reply": {
+      "main": [
+        [
+          {
+            "node": "Get Lead Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interested": {
+      "main": [
+        [
+          {
+            "node": "Get Lead Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead Details": {
+      "main": [
+        [
+          {
+            "node": "Process Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Data": {
+      "main": [
+        [
+          {
+            "node": "Search Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Person": {
+      "main": [
+        [
+          {
+            "node": "Person Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Person Exists?": {
+      "main": [
+        [
+          {
+            "node": "Update Person",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Person": {
+      "main": [
+        [
+          {
+            "node": "Merge Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Person": {
+      "main": [
+        [
+          {
+            "node": "Merge Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Data": {
+      "main": [
+        [
+          {
+            "node": "Create Task",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is Interested?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Interested?": {
+      "main": [
+        [
+          {
+            "node": "Create Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "1.0.0",
+  "triggerCount": 3,
+  "tags": ["lemlist", "attio", "community-node", "corrected"]
+}
